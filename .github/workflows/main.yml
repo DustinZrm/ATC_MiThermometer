@@ -1,38 +1,56 @@
-name: Build and Publish Release
+name: release
 
-# 触发条件：推送以 v 开头的标签（如 v1.0.0、v1.1.2）
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"  # 匹配语义化版本标签（如 1.0.0、2.1.3）
+
+permissions:
+  contents: write  # 允许修改仓库内容（创建/编辑 Release）
 
 jobs:
-  build-and-release:
+  create_release:
+    name: Create Release
     runs-on: ubuntu-latest
     steps:
-      # -------------------------- 1. 拉取代码 --------------------------
-      - name: Checkout Repository Code
+      - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # 拉取完整历史，确保 tag 信息正确
 
-      # -------------------------- 2. 安装依赖（可选） --------------------------
-      # 若项目需要交叉编译器/工具链（如 ARM GCC），在此安装
-      - name: Install Build Dependencies
+      - name: Get the release version from the tag
+        if: env.VERSION == ''
+        run: echo "VERSION=${{ github.ref_name }}" | tee -a $GITHUB_ENV
+
+      - name: Install jq (for parsing GH CLI output)
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Create GitHub release (draft)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${VERSION}" --draft --verify-tag --title "$VERSION" --json upload_url > release_output.json
+          echo "UPLOAD_URL=$(jq -r '.upload_url' release_output.json)" >> $GITHUB_OUTPUT  # 输出 upload_url 供后续步骤使用
+
+    outputs:
+      version: ${{ env.VERSION }}
+      upload_url: ${{ steps.create_release.outputs.UPLOAD_URL }}  # 暴露 upload_url 给依赖的 Job
+
+  build:
+    name: Build & Upload Bin
+    needs: [create_release]  # 依赖 create_release Job，获取 upload_url
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            make  # 示例：ARM 交叉编译器
-          # 若项目有其他依赖（如 Python 库），可添加：
-          # pip install --user -r requirements.txt
+            make
 
-      # -------------------------- 3. 执行 make 编译 --------------------------
-      - name: Build Project with Make
-        run: make
-        # 若项目在子文件夹（如 ./src），调整为：
-        # run: make -C ./src
+      - name: Build project with Make
+        run: make  # 执行编译，生成 ATC_Thermometer.bin
 
-      # -------------------------- 4. 验证 bin 文件存在 --------------------------
       - name: Verify Bin File
         id: verify_bin
         run: |
@@ -41,28 +59,34 @@ jobs:
             exit 1
           fi
           echo "✅ Bin file found: $(pwd)/ATC_Thermometer.bin"
-          # 传递 bin 文件名给后续步骤
-          echo "bin_name=ATC_Thermometer.bin" >> $GITHUB_OUTPUT
+          echo "bin_name=ATC_Thermometer.bin" >> $GITHUB_OUTPUT  # 输出 bin 文件名
 
-      # -------------------------- 5. 创建 GitHub Release --------------------------
-      - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动注入的 token，无需手动配置
-        with:
-          tag_name: ${{ github.ref_name }}  # 使用触发 workflow 的 tag 名称
-          release_name: Release ${{ github.ref_name }}  # Release 标题（如 Release v1.0.0）
-          draft: false  # 是否为草稿（false 表示直接发布）
-          prerelease: false  # 是否为预发布（根据需求调整）
-
-      # -------------------------- 6. 上传 bin 到 Release Assets --------------------------
-      - name: Upload Bin to Release
+      - name: Upload Bin to Release Assets
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}  # 来自创建 Release 的输出
-          asset_path: ATC_Thermometer.bin  # 本地 bin 文件路径
+          upload_url: ${{ needs.create_release.outputs.upload_url }}  # 从 create_release 获取上传地址
+          asset_path: ${{ steps.verify_bin.outputs.bin_name }}  # 本地 bin 文件路径
           asset_name: ${{ steps.verify_bin.outputs.bin_name }}  # Release 中显示的文件名
           content_type: application/octet-stream  # 二进制文件类型
+
+    outputs:
+      version: ${{ needs.create_release.outputs.version }}  # 传递版本号给后续 Job
+
+  publish_release:
+    name: Publish Release
+    needs: [build]  # 依赖 build Job，确保 bin 已上传
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Get the release version from the tag
+        if: env.VERSION == ''
+        run: echo "VERSION=${{ github.ref_name }}" | tee -a $GITHUB_ENV
+
+      - name: Publish GitHub release (un-draft)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${VERSION}" --draft=false  # 将草稿 Release 改为正式发布
