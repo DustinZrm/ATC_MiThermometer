@@ -286,15 +286,32 @@ void show_reboot_screen(void) {
 _attribute_ram_code_
 void show_clock(void) {
 	u32 tmp = wrk.utc_time_sec / 60;
+  u32 sec = wrk.utc_time_sec % 60;
 	u32 min = tmp % 60;
 	u32 hrs = (tmp / 60) % 24;
-	display_buff[5] = 0;
+	u32 hrs_12 = (hrs % 12) ? (hrs % 12) : 12;
+	u32 is_pm = (hrs >= 12) ? 1 : 0;
+	// display_buff[5] = 0;
 	display_buff[4] &= BIT(3); // ble
-	display_buff[4] = display_numbers[(hrs / 10) % 10];
-	display_buff[3] = display_numbers[hrs % 10];
+	// display_buff[4] = display_numbers[(hrs / 10) % 10];
+	// display_buff[3] = display_numbers[hrs % 10];
 	display_buff[2] &= BIT(0) | BIT(5); // "bat" & "/+"
-	display_buff[1] = display_small_numbers[(min / 10) % 10];
-	display_buff[0] = display_small_numbers[min % 10];
+	// display_buff[1] = display_small_numbers[(min / 10) % 10];
+	// display_buff[0] = display_small_numbers[min % 10];
+	// display_buff[5] = display_numbers[(hrs / 10) % 10];
+	display_buff[5] = display_numbers[hrs_12 % 10];
+  if (hrs_12 > 9) display_buff[5] |= BIT(3);
+  else display_buff[5] &= ~BIT(3);
+	display_buff[4] = display_numbers[(min / 10) % 10];
+	display_buff[3] = display_numbers[min % 10];
+  display_buff[2] = 0;
+  	// display_buff[1] = display_small_numbers[(sec / 10) % 10];
+	// display_buff[0] = display_small_numbers[sec % 10];
+  display_buff[1] = 0;
+  display_buff[0] = 0;
+  display_buff[0] |=  BIT(1) | BIT(2) | BIT(3) | BIT(6) | BIT(7);
+  if (!is_pm) display_buff[0] |=  BIT(5);
+  else display_buff[0] &= ~BIT(5);
 }
 #endif // USE_DISPLAY_CLOCK
 
